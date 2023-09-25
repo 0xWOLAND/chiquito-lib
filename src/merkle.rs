@@ -1,8 +1,7 @@
 use chiquito::ast::{query::Queriable, Expr};
 use chiquito::frontend::dsl::CircuitContext;
 use halo2curves::ff::PrimeField;
-
-use std::{hash::Hash, path};
+use std::hash::Hash;
 
 pub fn mux1<F: PrimeField>(a: Queriable<F>, b: Queriable<F>, s: Queriable<F>) -> Expr<F> {
     (a - b) * s + b
@@ -29,7 +28,7 @@ struct Inputs<F: PrimeField + Eq + Hash> {
     pub siblings: Vec<F>,
 }
 
-fn merkle_circuit<F, Levels>(ctx: &mut CircuitContext<F, Inputs<F>>, n_levels: usize)
+fn merkle_circuit<F>(ctx: &mut CircuitContext<F, Inputs<F>>, n_levels: usize)
 where
     F: PrimeField + From<u64> + Hash,
 {
@@ -49,7 +48,7 @@ where
             ctx.transition(eq(path_index * (-path_index + 1), 0));
             ctx.constr(eq(mux[0], mux1(hash, sibling, path_index)));
             ctx.constr(eq(mux[1], mux1(sibling, hash, path_index)));
-            ctx.constr(eq(hash, simple_hash(mux[0], mux[1])));
+            ctx.constr(eq(hash.next(), simple_hash(mux[0], mux[1])));
         });
 
         ctx.wg(move |ctx, round_values: RoundValues<F>| {
@@ -69,7 +68,7 @@ where
             ctx.transition(eq(path_index * (-path_index + 1), 0));
             ctx.constr(eq(mux[0], mux1(hash, sibling, path_index)));
             ctx.constr(eq(mux[1], mux1(sibling, hash, path_index)));
-            ctx.constr(eq(hash, simple_hash(mux[0], mux[1])));
+            ctx.constr(eq(hash.next(), simple_hash(mux[0], mux[1])));
         });
 
         ctx.wg(move |ctx, round_values: RoundValues<F>| {
@@ -82,14 +81,8 @@ where
     });
 
     let merkle_last_step = ctx.step_type_def("merkle last step", |ctx| {
-        let mux: Vec<Queriable<F>> = (0..2)
-            .map(|i| ctx.internal(format!("mux_{:?}", i).as_str()))
-            .collect();
         ctx.setup(move |ctx| {
             ctx.transition(eq(path_index * (-path_index + 1), 0));
-            ctx.constr(eq(mux[0], mux1(hash, sibling, path_index)));
-            ctx.constr(eq(mux[1], mux1(sibling, hash, path_index)));
-            ctx.constr(eq(hash, simple_hash(mux[0], mux[1])));
             ctx.constr(eq(hash, root));
         });
 
@@ -105,9 +98,51 @@ where
     ctx.pragma_last_step(&merkle_last_step);
     ctx.pragma_num_steps(n_levels);
 
-    ctx.trace(move |ctx, values| {})
+    ctx.trace(move |ctx, values| {
+        let _hash = |a: F, b: F| (a * F::from(931)) + (b * F::from(2358));
+        let mux_hash = |a, b, s: F| s * _hash(a, b) + (F::ONE - s) * _hash(b, a);
+        let mut hash = values.leaf;
+        ctx.add(
+            &merkle_first_step,
+            RoundValues {
+                leaf: values.leaf,
+                root: values.root,
+                path_index: values.path_indices[0],
+                sibling: values.siblings[0],
+                hash,
+            },
+        );
+
+        for i in 0..n_levels {
+            hash = mux_hash(hash, values.siblings[i], values.path_indices[i]);
+            ctx.add(
+                &merkle_step,
+                RoundValues {
+                    leaf: values.leaf,
+                    root: values.root,
+                    path_index: values.path_indices[i],
+                    sibling: values.path_indices[i],
+                    hash,
+                },
+            );
+        }
+
+        hash = mux_hash(
+            hash,
+            values.siblings[n_levels - 1],
+            values.path_indices[n_levels - 1],
+        );
+        ctx.add(
+            &merkle_last_step,
+            RoundValues {
+                leaf: values.leaf,
+                root: values.root,
+                path_index: values.path_indices[n_levels - 1],
+                sibling: values.path_indices[n_levels - 1],
+                hash,
+            },
+        );
+    })
 }
 
-pub fn main() {
-    println!("hello ")
-}
+pub fn main() {}
