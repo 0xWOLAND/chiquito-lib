@@ -14,7 +14,7 @@ use chiquito::{
 // use halo2curves::ff::Field;
 use std::hash::Hash;
 
-type Chip<F: PrimeField> = AssignmentGenerator<F, ValuesAndLens<F>>;
+type Chip<F> = AssignmentGenerator<F, ValuesAndLens<F>>;
 
 use halo2_proofs::{
     dev::MockProver,

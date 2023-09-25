@@ -1,6 +1,13 @@
 use chiquito::ast::{query::Queriable, Expr};
-use chiquito::frontend::dsl::CircuitContext;
-use halo2curves::ff::PrimeField;
+use chiquito::frontend::dsl::{super_circuit, CircuitContext};
+use chiquito::plonkish::backend::halo2::{chiquitoSuperCircuit2Halo2, ChiquitoHalo2SuperCircuit};
+use chiquito::plonkish::compiler::cell_manager::SingleRowCellManager;
+use chiquito::plonkish::compiler::config;
+use chiquito::plonkish::compiler::step_selector::SimpleStepSelectorBuilder;
+use chiquito::plonkish::ir::sc::SuperCircuit;
+use halo2_proofs::dev::MockProver;
+use halo2curves::bn256::Fr;
+use halo2curves::ff::{Field, PrimeField};
 use std::hash::Hash;
 
 pub fn mux1<F: PrimeField>(a: Queriable<F>, b: Queriable<F>, s: Queriable<F>) -> Expr<F> {
@@ -113,7 +120,8 @@ where
             },
         );
 
-        for i in 0..n_levels {
+        for i in 1..(n_levels - 1) {
+            println!("path index length: {:?} {:?}", i, values.path_indices.len(),);
             hash = mux_hash(hash, values.siblings[i], values.path_indices[i]);
             ctx.add(
                 &merkle_step,
@@ -145,4 +153,33 @@ where
     })
 }
 
-pub fn main() {}
+fn merkle_super_circuit<F: PrimeField + Eq + Hash>(n_levels: usize) -> SuperCircuit<F, Inputs<F>> {
+    super_circuit::<F, Inputs<F>, _>("merkle", |ctx| {
+        let config = config(SingleRowCellManager {}, SimpleStepSelectorBuilder {});
+        let (merkle, _) = ctx.sub_circuit(config, merkle_circuit, n_levels);
+
+        ctx.mapping(move |ctx, values| {
+            ctx.map(&merkle, values);
+        })
+    })
+}
+
+pub fn main() {
+    let n_levels: usize = 11;
+    let values = Inputs {
+        leaf: Fr::ONE,
+        root: Fr::ONE,
+        path_indices: vec![Fr::ONE; n_levels],
+        siblings: vec![Fr::ONE; n_levels],
+    };
+
+    let super_circuit = merkle_super_circuit::<Fr>(n_levels);
+    let compiled = chiquitoSuperCircuit2Halo2(&super_circuit);
+    let circuit =
+        ChiquitoHalo2SuperCircuit::new(compiled, super_circuit.get_mapping().generate(values));
+
+    let prover = MockProver::<Fr>::run(13, &circuit, Vec::new()).unwrap();
+    let result = prover.verify_par();
+
+    println!("res --- {:?}", result);
+}
